@@ -2,11 +2,11 @@
   "name": "oria-future-erp",
   "version": "1.0.0",
   "private": true,
-  "description": "ORIA FUTURE – eCommerce ERP & multi-account eBay management system",
+  "description": "ORIA FUTURE \u2013 eCommerce ERP & multi-account eBay management system",
   "scripts": {
     "dev": "next dev",
-    "build": "prisma generate && next build",
-    "start": "next start",
+    "build": "prisma generate && next build && node scripts/postbuild.mjs",
+    "start": "node .next/standalone/server.js",
     "lint": "next lint",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
@@ -53,5 +53,8 @@
     "tsx": "^4.20.5",
     "typescript": "^5.9.2",
     "vitest": "^3.2.4"
+  },
+  "engines": {
+    "node": ">=20.11"
   }
 }

@@ -1,0 +1,42 @@
+# Production stack: PostgreSQL + ORIA ERP + Caddy (automatic HTTPS via Let's Encrypt) + nightly backups
+#   1. cp .env.example .env   and fill in the secrets (POSTGRES_PASSWORD, ENCRYPTION_KEY, CRON_SECRET, DOMAIN, eBay keys)
+#   2. point your domain's DNS A record at the server
+#   3. docker compose up -d --build
+services:
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: oria_erp
+      POSTGRES_USER: oria
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+    volumes: [pgdata:/var/lib/postgresql/data]
+    healthcheck: { test: ["CMD-SHELL", "pg_isready -U oria -d oria_erp"], interval: 10s, retries: 5 }
+
+  app:
+    build: .
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql://oria:${POSTGRES_PASSWORD}@db:5432/oria_erp?schema=public
+      STORAGE_DIR: /app/storage/uploads
+    volumes: [uploads:/app/storage/uploads]
+    depends_on: { db: { condition: service_healthy } }
+
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    ports: ["80:80", "443:443"]
+    environment: { DOMAIN: "${DOMAIN:?set DOMAIN in .env}" }
+    volumes: [./Caddyfile:/etc/caddy/Caddyfile:ro, caddy_data:/data, caddy_config:/config]
+    depends_on: [app]
+
+  backup:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment: { DATABASE_HOST: db, PGPASSWORD: "${POSTGRES_PASSWORD}", RETENTION_DAYS: "14" }
+    volumes: [./backups:/backups, ./scripts/backup-loop.sh:/backup-loop.sh:ro, uploads:/uploads:ro]
+    entrypoint: ["/bin/sh", "/backup-loop.sh"]
+    depends_on: [db]
+
+volumes: { pgdata: {}, uploads: {}, caddy_data: {}, caddy_config: {} }

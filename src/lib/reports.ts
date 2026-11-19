@@ -38,10 +38,10 @@ export async function buildReport(name: string, p: ReportParams, u: CurrentUser)
   switch (name) {
     case "sales": {
       const agg = await prisma.$queryRaw<{ day: Date; orders: number; revenue: number; fees: number; refunds: number }[]>`
-        SELECT date_trunc('day', o."orderedAt") day, COUNT(*)::int orders, SUM(o.total)::float revenue, COALESCE(SUM(o.fees),0)::float fees, SUM(o."refundedAmount")::float refunds
+        SELECT date_trunc('day', o."orderedAt") AS day, COUNT(*)::int orders, SUM(o.total)::float revenue, COALESCE(SUM(o.fees),0)::float fees, SUM(o."refundedAmount")::float refunds
         FROM "EbayOrder" o WHERE o."orderedAt" BETWEEN ${from} AND ${to} ${accSql} GROUP BY 1 ORDER BY 1`;
       const units = await prisma.$queryRaw<{ day: Date; units: number }[]>`
-        SELECT date_trunc('day', o."orderedAt") day, SUM(i.quantity)::int units FROM "EbayOrderItem" i JOIN "EbayOrder" o ON o.id = i."orderId" WHERE o."orderedAt" BETWEEN ${from} AND ${to} ${accSql} GROUP BY 1`;
+        SELECT date_trunc('day', o."orderedAt") AS day, SUM(i.quantity)::int units FROM "EbayOrderItem" i JOIN "EbayOrder" o ON o.id = i."orderId" WHERE o."orderedAt" BETWEEN ${from} AND ${to} ${accSql} GROUP BY 1`;
       const out = agg.map((a) => ({ date: a.day, orders: a.orders, units: units.find((x) => +x.day === +a.day)?.units ?? 0, revenue: n(a.revenue), fees: n(a.fees), refunds: n(a.refunds), net: n(a.revenue - a.fees - a.refunds) }));
       const tot = (k: string) => n(out.reduce((s, r) => s + Number((r as Record<string, unknown>)[k]), 0));
       return { title: "Total sales", columns: [{ key: "date", label: "Date", type: "date" }, { key: "orders", label: "Orders", type: "number" }, { key: "units", label: "Units", type: "number" }, { key: "revenue", label: "Revenue", type: "money" }, { key: "fees", label: "eBay fees", type: "money" }, { key: "refunds", label: "Refunds", type: "money" }, { key: "net", label: "Net sales", type: "money" }], rows: out, summary: [["Orders", tot("orders")], ["Revenue", tot("revenue")], ["Fees", tot("fees")], ["Refunds", tot("refunds")], ["Net", tot("net")]], chart: { x: "date", y: ["revenue"], kind: "area" } };

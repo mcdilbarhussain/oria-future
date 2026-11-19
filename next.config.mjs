@@ -26,6 +26,10 @@ const nextConfig = {
   output: "standalone",
   serverExternalPackages: ["pdfkit", "exceljs", "pg", "bcryptjs"],
   experimental: { serverActions: { bodySizeLimit: "12mb" } },
+  // Files loaded dynamically by exceljs/pdfkit that the standalone tracer can miss
+  outputFileTracingIncludes: {
+    "/api/export/**": ["./node_modules/generator-function/**", "./node_modules/async-function/**", "./node_modules/pdfkit/js/data/**"],
+  },
   async headers() {
     return [{ source: "/:path*", headers: securityHeaders }];
   },

@@ -1,0 +1,7 @@
+{$DOMAIN} {
+	encode zstd gzip
+	# Server-Sent Events (real-time) need unbuffered proxying
+	reverse_proxy app:3000 {
+		flush_interval -1
+	}
+}

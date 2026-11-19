@@ -55,9 +55,11 @@ export default async function AppLayout({ children }: { children: React.ReactNod
     ] },
   ].map((g) => ({ ...g, items: g.items.filter(Boolean) as NavGroup["items"] })).filter((g) => g.items.length);
 
-  const banner = u.mustChangePassword ? (
+  const settings = await prisma.companySetting.findUnique({ where: { id: 1 }, select: { require2FAForAdmins: true } });
+  const need2FA = !u.totpEnabled && (u.isSuperAdmin || (settings?.require2FAForAdmins && u.role.level >= 60));
+  const banner = u.mustChangePassword || need2FA ? (
     <div className="border-b border-gold-300 bg-gold-50 px-6 py-2 text-sm text-gold-800">
-      Security: please <Link href="/profile" className="font-semibold underline">change your initial password</Link>{u.isSuperAdmin && !u.totpEnabled ? " and enable two-factor authentication" : ""}.
+      Security: please {u.mustChangePassword && <><Link href="/profile" className="font-semibold underline">change your initial password</Link>{need2FA ? " and " : ""}</>}{need2FA && <Link href="/profile" className="font-semibold underline">enable two-factor authentication</Link>}.
     </div>
   ) : null;
 
