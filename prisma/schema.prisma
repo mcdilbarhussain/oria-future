@@ -1,0 +1,1015 @@
+// ORIA FUTURE ERP – database schema
+// Conventions:
+//  * Important business records use soft deletion (deletedAt) and are never hard-deleted by the app.
+//  * Money is stored as Decimal(14,2); currency is stored alongside.
+//  * isDemo = true marks seeded demo data so it can be clearly labelled and purged.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ───────────────────────────── Organisation & access ─────────────────────────────
+
+model CompanySetting {
+  id                 Int      @id @default(1)
+  companyName        String   @default("ORIA FUTURE")
+  legalName          String?
+  email              String?
+  phone              String?
+  address            String?
+  baseCurrency       String   @default("GBP")
+  timezone           String   @default("Europe/London")
+  lowStockAlerts     Boolean  @default(true)
+  require2FAForAdmins Boolean @default(false)
+  sessionIdleMinutes Int      @default(60)
+  updatedAt          DateTime @updatedAt
+}
+
+model Department {
+  id          String   @id @default(cuid())
+  name        String   @unique
+  code        String   @unique
+  description String?
+  color       String   @default("#1b2e5a")
+  managerId   String?
+  manager     User?    @relation("DepartmentManager", fields: [managerId], references: [id])
+  users       User[]   @relation("DepartmentMembers")
+  tasks       Task[]
+  channels    ChatChannel[]
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  deletedAt   DateTime?
+}
+
+model Role {
+  id          String           @id @default(cuid())
+  key         String           @unique
+  name        String
+  description String?
+  isSystem    Boolean          @default(false)
+  // Higher level = more seniority. Only Super Admin (100) can manage roles.
+  level       Int              @default(10)
+  permissions RolePermission[]
+  users       User[]
+  createdAt   DateTime         @default(now())
+  updatedAt   DateTime         @updatedAt
+}
+
+model RolePermission {
+  id     String @id @default(cuid())
+  roleId String
+  role   Role   @relation(fields: [roleId], references: [id], onDelete: Cascade)
+  module String
+  action String
+
+  @@unique([roleId, module, action])
+}
+
+enum UserStatus {
+  ACTIVE
+  SUSPENDED
+  INVITED
+}
+
+model User {
+  id               String     @id @default(cuid())
+  email            String     @unique
+  name             String
+  passwordHash     String
+  jobTitle         String?
+  phone            String?
+  avatarColor      String     @default("#253d74")
+  status           UserStatus @default(ACTIVE)
+  roleId           String
+  role             Role       @relation(fields: [roleId], references: [id])
+  departmentId     String?
+  department       Department? @relation("DepartmentMembers", fields: [departmentId], references: [id])
+  managedDepartments Department[] @relation("DepartmentManager")
+  totpSecretEnc    String?
+  totpEnabled      Boolean    @default(false)
+  mustChangePassword Boolean  @default(false)
+  failedLogins     Int        @default(0)
+  lockedUntil      DateTime?
+  lastLoginAt      DateTime?
+  lastSeenAt       DateTime?
+  createdAt        DateTime   @default(now())
+  updatedAt        DateTime   @updatedAt
+  deletedAt        DateTime?
+
+  sessions          Session[]
+  resetTokens       PasswordResetToken[]
+  notifications     Notification[]
+  auditLogs         AuditLog[]
+  tasksCreated      Task[]           @relation("TaskCreator")
+  tasksAssigned     Task[]           @relation("TaskAssignee")
+  taskComments      TaskComment[]
+  chatMemberships   ChatMember[]
+  chatMessages      ChatMessage[]
+  dailyReports      DailyReport[]
+  requestsMade      ApprovalRequest[] @relation("RequestRequester")
+  requestsReviewed  ApprovalRequest[] @relation("RequestReviewer")
+  ebayAssignments   EbayAccountAssignment[]
+  files             FileAsset[]
+  stockMovements    StockMovement[]
+  employeePayments  EmployeePayment[]
+  assignedThreads   BuyerMessageThread[]
+  supplierReviews   SupplierReview[]
+}
+
+model Session {
+  id           String   @id @default(cuid())
+  tokenHash    String   @unique
+  userId       String
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  ip           String?
+  userAgent    String?
+  // true until the second factor has been verified
+  pending2FA   Boolean  @default(false)
+  createdAt    DateTime @default(now())
+  lastActiveAt DateTime @default(now())
+  expiresAt    DateTime
+
+  @@index([userId])
+}
+
+model PasswordResetToken {
+  id        String    @id @default(cuid())
+  tokenHash String    @unique
+  userId    String
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  expiresAt DateTime
+  usedAt    DateTime?
+  createdAt DateTime  @default(now())
+}
+
+model LoginLog {
+  id        String   @id @default(cuid())
+  userId    String?
+  email     String
+  success   Boolean
+  reason    String?
+  ip        String?
+  userAgent String?
+  createdAt DateTime @default(now())
+
+  @@index([createdAt])
+}
+
+model AuditLog {
+  id        String   @id @default(cuid())
+  userId    String?
+  user      User?    @relation(fields: [userId], references: [id])
+  action    String
+  module    String
+  entity    String?
+  entityId  String?
+  summary   String
+  before    Json?
+  after     Json?
+  ip        String?
+  createdAt DateTime @default(now())
+
+  @@index([module, createdAt])
+  @@index([createdAt])
+}
+
+model Notification {
+  id        String    @id @default(cuid())
+  userId    String
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  type      String
+  title     String
+  body      String?
+  link      String?
+  readAt    DateTime?
+  createdAt DateTime  @default(now())
+
+  @@index([userId, readAt])
+}
+
+model FileAsset {
+  id           String   @id @default(cuid())
+  filename     String
+  mimeType     String
+  size         Int
+  storageKey   String   @unique
+  uploadedById String
+  uploadedBy   User     @relation(fields: [uploadedById], references: [id])
+  // polymorphic link e.g. entityType="task", entityId=<taskId>
+  entityType   String?
+  entityId     String?
+  createdAt    DateTime @default(now())
+
+  @@index([entityType, entityId])
+}
+
+// ───────────────────────────── Tasks & daily work ─────────────────────────────
+
+enum TaskStatus {
+  NEW
+  ASSIGNED
+  IN_PROGRESS
+  WAITING_APPROVAL
+  COMPLETED
+  REJECTED
+  OVERDUE
+}
+
+enum Priority {
+  LOW
+  MEDIUM
+  HIGH
+  URGENT
+}
+
+model Task {
+  id           String     @id @default(cuid())
+  title        String
+  description  String?
+  priority     Priority   @default(MEDIUM)
+  status       TaskStatus @default(NEW)
+  progress     Int        @default(0)
+  dueDate      DateTime?
+  createdById  String
+  createdBy    User       @relation("TaskCreator", fields: [createdById], references: [id])
+  assigneeId   String?
+  assignee     User?      @relation("TaskAssignee", fields: [assigneeId], references: [id])
+  departmentId String?
+  department   Department? @relation(fields: [departmentId], references: [id])
+  acceptedAt   DateTime?
+  submittedAt  DateTime?
+  completedAt  DateTime?
+  reviewedById String?
+  reminderSentAt DateTime?
+  comments     TaskComment[]
+  createdAt    DateTime   @default(now())
+  updatedAt    DateTime   @updatedAt
+  deletedAt    DateTime?
+
+  @@index([assigneeId, status])
+  @@index([departmentId, status])
+}
+
+model TaskComment {
+  id        String   @id @default(cuid())
+  taskId    String
+  task      Task     @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  userId    String
+  user      User     @relation(fields: [userId], references: [id])
+  body      String
+  kind      String   @default("COMMENT") // COMMENT | ASSISTANCE | STATUS | PROOF
+  createdAt DateTime @default(now())
+}
+
+model DailyReport {
+  id         String   @id @default(cuid())
+  userId     String
+  user       User     @relation(fields: [userId], references: [id])
+  date       DateTime @db.Date
+  summary    String
+  completed  String?
+  blockers   String?
+  hoursWorked Decimal? @db.Decimal(4, 1)
+  createdAt  DateTime @default(now())
+
+  @@unique([userId, date])
+}
+
+enum RequestStatus {
+  PENDING
+  APPROVED
+  REJECTED
+  CANCELLED
+}
+
+// Generic approval / request object: assistance, balance enquiries, finance approvals, leave etc.
+model ApprovalRequest {
+  id            String        @id @default(cuid())
+  type          String        // ASSISTANCE | BALANCE_ENQUIRY | FINANCE | GENERAL
+  title         String
+  details       String?
+  amount        Decimal?      @db.Decimal(14, 2)
+  currency      String?
+  status        RequestStatus @default(PENDING)
+  requestedById String
+  requestedBy   User          @relation("RequestRequester", fields: [requestedById], references: [id])
+  reviewedById  String?
+  reviewedBy    User?         @relation("RequestReviewer", fields: [reviewedById], references: [id])
+  reviewNote    String?
+  reviewedAt    DateTime?
+  entityType    String?
+  entityId      String?
+  createdAt     DateTime      @default(now())
+  updatedAt     DateTime      @updatedAt
+
+  @@index([status, type])
+}
+
+// ───────────────────────────── Internal chat ─────────────────────────────
+
+enum ChannelType {
+  DIRECT
+  GROUP
+  DEPARTMENT
+}
+
+model ChatChannel {
+  id           String        @id @default(cuid())
+  type         ChannelType
+  name         String?
+  description  String?
+  departmentId String?
+  department   Department?   @relation(fields: [departmentId], references: [id])
+  // when true only managers/admins can post (announcement style)
+  readOnly     Boolean       @default(false)
+  directKey    String?       @unique // sorted "userA:userB" for DIRECT channels
+  members      ChatMember[]
+  messages     ChatMessage[]
+  createdAt    DateTime      @default(now())
+  archivedAt   DateTime?
+}
+
+model ChatMember {
+  id         String      @id @default(cuid())
+  channelId  String
+  channel    ChatChannel @relation(fields: [channelId], references: [id], onDelete: Cascade)
+  userId     String
+  user       User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+  isAdmin    Boolean     @default(false)
+  lastReadAt DateTime    @default(now())
+  joinedAt   DateTime    @default(now())
+
+  @@unique([channelId, userId])
+}
+
+model ChatMessage {
+  id        String      @id @default(cuid())
+  channelId String
+  channel   ChatChannel @relation(fields: [channelId], references: [id], onDelete: Cascade)
+  senderId  String
+  sender    User        @relation(fields: [senderId], references: [id])
+  body      String
+  fileId    String?
+  taskId    String?
+  pinned    Boolean     @default(false)
+  createdAt DateTime    @default(now())
+  editedAt  DateTime?
+  deletedAt DateTime?
+
+  @@index([channelId, createdAt])
+}
+
+// ───────────────────────────── Inventory & warehouse ─────────────────────────────
+
+model Warehouse {
+  id        String   @id @default(cuid())
+  code      String   @unique
+  name      String
+  address   String?
+  country   String   @default("United Kingdom")
+  isDefault Boolean  @default(false)
+  stock     StockLevel[]
+  movements StockMovement[]
+  purchaseOrders PurchaseOrder[]
+  createdAt DateTime @default(now())
+  deletedAt DateTime?
+}
+
+model Product {
+  id           String   @id @default(cuid())
+  sku          String   @unique
+  name         String
+  barcode      String?  @unique
+  description  String?
+  category     String?
+  brand        String?
+  costPrice    Decimal  @default(0) @db.Decimal(14, 2)
+  sellPrice    Decimal  @default(0) @db.Decimal(14, 2)
+  currency     String   @default("GBP")
+  weightKg     Decimal? @db.Decimal(8, 3)
+  reorderLevel Int      @default(10)
+  reorderQty   Int      @default(50)
+  imageUrl     String?
+  preferredSupplierId String?
+  preferredSupplier   Supplier? @relation(fields: [preferredSupplierId], references: [id])
+  isDemo       Boolean  @default(false)
+  stock        StockLevel[]
+  movements    StockMovement[]
+  supplierProducts SupplierProduct[]
+  purchaseRequests PurchaseRequest[]
+  poItems      PurchaseOrderItem[]
+  listings     EbayListing[]
+  enquiries    PriceEnquiry[]
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+  deletedAt    DateTime?
+}
+
+model StockLevel {
+  id          String    @id @default(cuid())
+  productId   String
+  product     Product   @relation(fields: [productId], references: [id])
+  warehouseId String
+  warehouse   Warehouse @relation(fields: [warehouseId], references: [id])
+  quantity    Int       @default(0)
+  binLocation String?
+  updatedAt   DateTime  @updatedAt
+
+  @@unique([productId, warehouseId])
+}
+
+enum MovementType {
+  IN
+  OUT
+  ADJUSTMENT
+  DAMAGED
+  RETURN
+  TRANSFER_IN
+  TRANSFER_OUT
+  PURCHASE_RECEIPT
+  SALE
+}
+
+model StockMovement {
+  id          String       @id @default(cuid())
+  productId   String
+  product     Product      @relation(fields: [productId], references: [id])
+  warehouseId String
+  warehouse   Warehouse    @relation(fields: [warehouseId], references: [id])
+  type        MovementType
+  // signed quantity: positive = increases stock, negative = decreases
+  quantity    Int
+  balanceAfter Int
+  reference   String?
+  note        String?
+  userId      String?
+  user        User?        @relation(fields: [userId], references: [id])
+  createdAt   DateTime     @default(now())
+
+  @@index([productId, createdAt])
+}
+
+// ───────────────────────────── Suppliers & procurement ─────────────────────────────
+
+model Supplier {
+  id            String   @id @default(cuid())
+  companyName   String
+  contactPerson String?
+  email         String?
+  phone         String?
+  wechat        String?
+  website       String?
+  city          String?
+  province      String?
+  country       String   @default("China")
+  categories    String[]
+  paymentTerms  String?
+  currency      String   @default("USD")
+  defaultShippingCost Decimal? @db.Decimal(14, 2)
+  rating        Decimal? @db.Decimal(2, 1)
+  notes         String?
+  isDemo        Boolean  @default(false)
+  products      SupplierProduct[]
+  reviews       SupplierReview[]
+  communications SupplierCommunication[]
+  quotations    Quotation[]
+  purchaseOrders PurchaseOrder[]
+  preferredFor  Product[]
+  transactions  Transaction[]
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+  deletedAt     DateTime?
+}
+
+model SupplierProduct {
+  id           String   @id @default(cuid())
+  supplierId   String
+  supplier     Supplier @relation(fields: [supplierId], references: [id])
+  productId    String?
+  product      Product? @relation(fields: [productId], references: [id])
+  name         String
+  supplierSku  String?
+  unitPrice    Decimal  @db.Decimal(14, 2)
+  currency     String   @default("USD")
+  moq          Int      @default(1)
+  shippingCostPerUnit Decimal? @db.Decimal(14, 2)
+  leadTimeDays Int?
+  updatedAt    DateTime @updatedAt
+  createdAt    DateTime @default(now())
+}
+
+model SupplierReview {
+  id         String   @id @default(cuid())
+  supplierId String
+  supplier   Supplier @relation(fields: [supplierId], references: [id])
+  userId     String
+  user       User     @relation(fields: [userId], references: [id])
+  rating     Int
+  comment    String?
+  createdAt  DateTime @default(now())
+}
+
+model SupplierCommunication {
+  id         String   @id @default(cuid())
+  supplierId String
+  supplier   Supplier @relation(fields: [supplierId], references: [id])
+  userId     String
+  channel    String   // EMAIL | WECHAT | PHONE | ALIBABA | MEETING | OTHER
+  subject    String?
+  summary    String
+  occurredAt DateTime @default(now())
+  createdAt  DateTime @default(now())
+}
+
+enum EnquiryStatus {
+  OPEN
+  QUOTING
+  RECOMMENDED
+  APPROVED
+  REJECTED
+}
+
+model PriceEnquiry {
+  id             String        @id @default(cuid())
+  reference      String        @unique
+  productId      String?
+  product        Product?      @relation(fields: [productId], references: [id])
+  productName    String
+  quantity       Int
+  targetPrice    Decimal?      @db.Decimal(14, 2)
+  notes          String?
+  status         EnquiryStatus @default(OPEN)
+  requestedById  String
+  recommendation String?
+  recommendedQuotationId String?
+  reviewedById   String?
+  reviewNote     String?
+  quotations     Quotation[]
+  createdAt      DateTime      @default(now())
+  updatedAt      DateTime      @updatedAt
+}
+
+model Quotation {
+  id                String   @id @default(cuid())
+  supplierId        String
+  supplier          Supplier @relation(fields: [supplierId], references: [id])
+  enquiryId         String?
+  enquiry           PriceEnquiry? @relation(fields: [enquiryId], references: [id])
+  purchaseRequestId String?
+  purchaseRequest   PurchaseRequest? @relation(fields: [purchaseRequestId], references: [id])
+  unitPrice         Decimal  @db.Decimal(14, 2)
+  currency          String   @default("USD")
+  moq               Int      @default(1)
+  shippingCost      Decimal  @default(0) @db.Decimal(14, 2)
+  leadTimeDays      Int?
+  validUntil        DateTime?
+  notes             String?
+  fileId            String?
+  createdById       String
+  createdAt         DateTime @default(now())
+}
+
+// Procurement workflow (see src/lib/workflows/purchasing.ts):
+// SUBMITTED → MANAGEMENT_REVIEWED → QUOTATION_REQUESTED → QUOTED → FINANCE_REVIEWED → APPROVED → ORDERED (PO) → RECEIVED
+enum PurchaseRequestStatus {
+  SUBMITTED
+  MANAGEMENT_REVIEWED
+  QUOTATION_REQUESTED
+  QUOTED
+  FINANCE_REVIEWED
+  APPROVED
+  ORDERED
+  RECEIVED
+  REJECTED
+  CANCELLED
+}
+
+model PurchaseRequest {
+  id              String   @id @default(cuid())
+  reference       String   @unique
+  productId       String
+  product         Product  @relation(fields: [productId], references: [id])
+  quantity        Int
+  reason          String?
+  priority        Priority @default(MEDIUM)
+  status          PurchaseRequestStatus @default(SUBMITTED)
+  estimatedCost   Decimal? @db.Decimal(14, 2)
+  currency        String   @default("GBP")
+  selectedQuotationId String?
+  requestedById   String
+  managementReviewById String?
+  financeReviewById    String?
+  approvedById    String?
+  rejectedById    String?
+  rejectionReason String?
+  financeNote     String?
+  quotations      Quotation[]
+  purchaseOrder   PurchaseOrder?
+  history         Json     @default("[]")
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+}
+
+enum POStatus {
+  DRAFT
+  ORDERED
+  SHIPPED
+  IN_TRANSIT
+  CUSTOMS
+  RECEIVED
+  PARTIALLY_RECEIVED
+  CANCELLED
+}
+
+model PurchaseOrder {
+  id                String   @id @default(cuid())
+  poNumber          String   @unique
+  supplierId        String
+  supplier          Supplier @relation(fields: [supplierId], references: [id])
+  purchaseRequestId String?  @unique
+  purchaseRequest   PurchaseRequest? @relation(fields: [purchaseRequestId], references: [id])
+  warehouseId       String
+  warehouse         Warehouse @relation(fields: [warehouseId], references: [id])
+  status            POStatus @default(DRAFT)
+  currency          String   @default("USD")
+  subtotal          Decimal  @default(0) @db.Decimal(14, 2)
+  shippingCost      Decimal  @default(0) @db.Decimal(14, 2)
+  total             Decimal  @default(0) @db.Decimal(14, 2)
+  carrier           String?
+  trackingNumber    String?
+  orderedAt         DateTime?
+  shippedAt         DateTime?
+  eta               DateTime?
+  receivedAt        DateTime?
+  notes             String?
+  createdById       String
+  isDemo            Boolean  @default(false)
+  items             PurchaseOrderItem[]
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+  deletedAt         DateTime?
+}
+
+model PurchaseOrderItem {
+  id         String        @id @default(cuid())
+  poId       String
+  po         PurchaseOrder @relation(fields: [poId], references: [id], onDelete: Cascade)
+  productId  String
+  product    Product       @relation(fields: [productId], references: [id])
+  quantity   Int
+  unitCost   Decimal       @db.Decimal(14, 2)
+  receivedQty Int          @default(0)
+}
+
+// ───────────────────────────── Finance ─────────────────────────────
+
+model FinanceAccount {
+  id             String   @id @default(cuid())
+  name           String
+  type           String   // BANK | CASH | PAYOUT | CARD | OTHER
+  currency       String   @default("GBP")
+  openingBalance Decimal  @default(0) @db.Decimal(14, 2)
+  notes          String?
+  transactions   Transaction[]
+  createdAt      DateTime @default(now())
+  deletedAt      DateTime?
+}
+
+enum TxType {
+  INCOME
+  EXPENSE
+}
+
+enum TxStatus {
+  PENDING_APPROVAL
+  APPROVED
+  REJECTED
+}
+
+model Transaction {
+  id               String   @id @default(cuid())
+  type             TxType
+  // SALES | REFUND | PLATFORM_FEE | SUPPLIER_PAYMENT | PURCHASE | SHIPPING | WAREHOUSE | SALARY | OFFICE | MARKETING | TAX | OTHER
+  category         String
+  amount           Decimal  @db.Decimal(14, 2)
+  currency         String   @default("GBP")
+  date             DateTime
+  description      String
+  reference        String?
+  status           TxStatus @default(APPROVED)
+  // true = estimate / forecast (not yet realised). Reports separate estimated vs actual.
+  isEstimated      Boolean  @default(false)
+  // PAID | OUTSTANDING
+  paymentStatus    String   @default("PAID")
+  dueDate          DateTime?
+  ebayAccountId    String?
+  ebayAccount      EbayAccount? @relation(fields: [ebayAccountId], references: [id])
+  supplierId       String?
+  supplier         Supplier? @relation(fields: [supplierId], references: [id])
+  financeAccountId String?
+  financeAccount   FinanceAccount? @relation(fields: [financeAccountId], references: [id])
+  purchaseOrderId  String?
+  ebayOrderId      String?
+  createdById      String
+  approvedById     String?
+  isDemo           Boolean  @default(false)
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+  deletedAt        DateTime?
+
+  @@index([date])
+  @@index([type, category])
+}
+
+model EmployeePayment {
+  id        String   @id @default(cuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id])
+  period    String   // e.g. 2026-10
+  type      String   @default("SALARY") // SALARY | BONUS | ADVANCE | REIMBURSEMENT
+  amount    Decimal  @db.Decimal(14, 2)
+  currency  String   @default("GBP")
+  paidAt    DateTime?
+  note      String?
+  createdById String
+  createdAt DateTime @default(now())
+  deletedAt DateTime?
+}
+
+// ───────────────────────────── eBay ─────────────────────────────
+
+enum EbayEnv {
+  SANDBOX
+  PRODUCTION
+}
+
+enum EbayConnStatus {
+  PENDING
+  CONNECTED
+  EXPIRED
+  DISCONNECTED
+  ERROR
+}
+
+model EbayAccount {
+  id                    String         @id @default(cuid())
+  name                  String
+  code                  String         @unique
+  ebayUsername          String?
+  environment           EbayEnv        @default(SANDBOX)
+  marketplaceId         String         @default("EBAY_GB")
+  status                EbayConnStatus @default(PENDING)
+  // AES-256-GCM encrypted; never sent to the browser
+  accessTokenEnc        String?
+  refreshTokenEnc       String?
+  accessTokenExpiresAt  DateTime?
+  refreshTokenExpiresAt DateTime?
+  scopes                String[]
+  fulfillmentPolicyId   String?
+  paymentPolicyId       String?
+  returnPolicyId        String?
+  merchantLocationKey   String?
+  lastSyncAt            DateTime?
+  lastSyncError         String?
+  connectedAt           DateTime?
+  isDemo                Boolean        @default(false)
+  notes                 String?
+  performance           Json?
+  performanceAt         DateTime?
+  assignments           EbayAccountAssignment[]
+  orders                EbayOrder[]
+  listings              EbayListing[]
+  threads               BuyerMessageThread[]
+  returns               EbayReturn[]
+  transactions          Transaction[]
+  syncLogs              SyncLog[]
+  createdAt             DateTime       @default(now())
+  updatedAt             DateTime       @updatedAt
+  deletedAt             DateTime?
+}
+
+model EbayAccountAssignment {
+  id            String      @id @default(cuid())
+  userId        String
+  user          User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+  ebayAccountId String
+  ebayAccount   EbayAccount @relation(fields: [ebayAccountId], references: [id], onDelete: Cascade)
+  createdAt     DateTime    @default(now())
+
+  @@unique([userId, ebayAccountId])
+}
+
+model EbayOAuthState {
+  state         String   @id
+  ebayAccountId String
+  userId        String
+  expiresAt     DateTime
+  createdAt     DateTime @default(now())
+}
+
+model EbayOrder {
+  id                String      @id @default(cuid())
+  ebayAccountId     String
+  ebayAccount       EbayAccount @relation(fields: [ebayAccountId], references: [id])
+  orderId           String
+  buyerUsername     String?
+  buyerName         String?
+  shipToCity        String?
+  shipToPostcode    String?
+  shipToCountry     String?
+  orderStatus       String?     // eBay orderFulfillmentStatus: NOT_STARTED | IN_PROGRESS | FULFILLED
+  paymentStatus     String?     // eBay orderPaymentStatus: PAID | PENDING | FAILED | FULLY_REFUNDED | PARTIALLY_REFUNDED
+  total             Decimal     @db.Decimal(14, 2)
+  currency          String      @default("GBP")
+  deliveryCost      Decimal     @default(0) @db.Decimal(14, 2)
+  fees              Decimal?    @db.Decimal(14, 2)
+  refundedAmount    Decimal     @default(0) @db.Decimal(14, 2)
+  trackingNumber    String?
+  carrier           String?
+  dispatchBy        DateTime?
+  dispatchedAt      DateTime?
+  orderedAt         DateTime
+  raw               Json?
+  isDemo            Boolean     @default(false)
+  items             EbayOrderItem[]
+  createdAt         DateTime    @default(now())
+  updatedAt         DateTime    @updatedAt
+
+  @@unique([ebayAccountId, orderId])
+  @@index([orderedAt])
+}
+
+model EbayOrderItem {
+  id         String    @id @default(cuid())
+  orderId    String
+  order      EbayOrder @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  lineItemId String
+  sku        String?
+  title      String
+  quantity   Int
+  unitPrice  Decimal   @db.Decimal(14, 2)
+  productId  String?
+  ebayItemId String?
+}
+
+enum ListingStatus {
+  DRAFT
+  PUBLISHING
+  ACTIVE
+  OUT_OF_STOCK
+  ENDED
+  ERROR
+}
+
+model EbayListing {
+  id              String        @id @default(cuid())
+  ebayAccountId   String
+  ebayAccount     EbayAccount   @relation(fields: [ebayAccountId], references: [id])
+  productId       String?
+  product         Product?      @relation(fields: [productId], references: [id])
+  sku             String
+  title           String
+  description     String?
+  categoryId      String?
+  condition       String        @default("NEW")
+  price           Decimal       @db.Decimal(14, 2)
+  currency        String        @default("GBP")
+  quantity        Int           @default(0)
+  imageUrls       String[]
+  aspects         Json?         // item specifics { "Brand": ["X"], ... }
+  listingFormat   String        @default("FIXED_PRICE")
+  listingDuration String        @default("GTC")
+  status          ListingStatus @default(DRAFT)
+  offerId         String?
+  ebayItemId      String?
+  views           Int           @default(0)
+  watchers        Int           @default(0)
+  soldQuantity    Int           @default(0)
+  lastError       String?
+  lastPublishedAt DateTime?
+  createdById     String?
+  updatedById     String?
+  isDemo          Boolean       @default(false)
+  createdAt       DateTime      @default(now())
+  updatedAt       DateTime      @updatedAt
+  deletedAt       DateTime?
+
+  @@unique([ebayAccountId, sku])
+}
+
+model EbayReturn {
+  id            String      @id @default(cuid())
+  ebayAccountId String
+  ebayAccount   EbayAccount @relation(fields: [ebayAccountId], references: [id])
+  returnId      String
+  orderId       String?
+  buyerUsername String?
+  reason        String?
+  status        String
+  refundAmount  Decimal?    @db.Decimal(14, 2)
+  currency      String      @default("GBP")
+  openedAt      DateTime
+  isDemo        Boolean     @default(false)
+  createdAt     DateTime    @default(now())
+  updatedAt     DateTime    @updatedAt
+
+  @@unique([ebayAccountId, returnId])
+}
+
+enum ThreadStatus {
+  NEW
+  ASSIGNED
+  AWAITING_REVIEW
+  REPLIED
+  CLOSED
+}
+
+model BuyerMessageThread {
+  id            String       @id @default(cuid())
+  ebayAccountId String
+  ebayAccount   EbayAccount  @relation(fields: [ebayAccountId], references: [id])
+  externalId    String
+  buyerUsername String
+  subject       String
+  ebayItemId    String?
+  orderId       String?
+  status        ThreadStatus @default(NEW)
+  important     Boolean      @default(false)
+  unread        Boolean      @default(true)
+  assignedToId  String?
+  assignedTo    User?        @relation(fields: [assignedToId], references: [id])
+  lastMessageAt DateTime
+  isDemo        Boolean      @default(false)
+  messages      BuyerMessage[]
+  notes         ConversationNote[]
+  createdAt     DateTime     @default(now())
+  updatedAt     DateTime     @updatedAt
+
+  @@unique([ebayAccountId, externalId])
+}
+
+enum MessageDirection {
+  INBOUND
+  OUTBOUND
+}
+
+enum OutboundStatus {
+  RECEIVED
+  DRAFT
+  PENDING_REVIEW
+  SENT
+  FAILED
+}
+
+model BuyerMessage {
+  id          String             @id @default(cuid())
+  threadId    String
+  thread      BuyerMessageThread @relation(fields: [threadId], references: [id], onDelete: Cascade)
+  direction   MessageDirection
+  body        String
+  externalId  String?
+  status      OutboundStatus     @default(RECEIVED)
+  authorId    String?
+  reviewedById String?
+  error       String?
+  sentAt      DateTime?
+  createdAt   DateTime           @default(now())
+}
+
+model ConversationNote {
+  id        String             @id @default(cuid())
+  threadId  String
+  thread    BuyerMessageThread @relation(fields: [threadId], references: [id], onDelete: Cascade)
+  userId    String
+  body      String
+  createdAt DateTime           @default(now())
+}
+
+model ReplyTemplate {
+  id          String   @id @default(cuid())
+  name        String
+  category    String?
+  body        String
+  createdById String
+  createdAt   DateTime @default(now())
+  deletedAt   DateTime?
+}
+
+model SyncLog {
+  id            String      @id @default(cuid())
+  ebayAccountId String
+  ebayAccount   EbayAccount @relation(fields: [ebayAccountId], references: [id])
+  kind          String      // ORDERS | LISTINGS | INVENTORY | MESSAGES | RETURNS | TOKEN
+  status        String      // SUCCESS | FAILED | SKIPPED
+  message       String?
+  itemsProcessed Int        @default(0)
+  startedAt     DateTime    @default(now())
+  finishedAt    DateTime?
+
+  @@index([ebayAccountId, startedAt])
+}
