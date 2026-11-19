@@ -45,7 +45,8 @@ async function loadSession(allowPending = false) {
   const s = await prisma.session.findUnique({ where: { tokenHash: sha256(token) } });
   if (!s) return null;
   const now = Date.now();
-  const idleExpired = now - s.lastActiveAt.getTime() > IDLE_MIN * 60_000;
+  const idle = (await prisma.companySetting.findUnique({ where: { id: 1 }, select: { sessionIdleMinutes: true } }))?.sessionIdleMinutes ?? IDLE_MIN;
+  const idleExpired = now - s.lastActiveAt.getTime() > idle * 60_000;
   if (s.expiresAt.getTime() < now || (!s.pending2FA && idleExpired)) {
     await prisma.session.delete({ where: { id: s.id } }).catch(() => {});
     return null;
