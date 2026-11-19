@@ -1,6 +1,6 @@
 import { NextResponse, type NextRequest } from "next/server";
 
-const PUBLIC = ["/login", "/forgot-password", "/reset-password", "/api/ebay/oauth/callback", "/api/ebay/account-deletion", "/api/cron", "/api/health"];
+const PUBLIC = ["/api/listing-images", "/login", "/forgot-password", "/reset-password", "/api/ebay/oauth/callback", "/api/ebay/account-deletion", "/api/cron", "/api/health"];
 
 /** Edge gate: unauthenticated visitors are sent to /login. Full session + permission checks happen server-side. */
 export function middleware(req: NextRequest) {
